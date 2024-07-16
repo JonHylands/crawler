@@ -7,8 +7,8 @@ import time
 from datetime import timedelta
 
 # User-defined constants
-WARNING = 500  # 50cm, orange
-CRITICAL = 250  # 30cm, red
+WARNING = 1000  # 50cm, orange
+CRITICAL = 500  # 30cm, red
 
 image_path = '/home/pi/ssd/images'
 metadata_path = '/home/pi/ssd/metadata'
@@ -41,12 +41,14 @@ left.out.link(stereo.left)
 right.out.link(stereo.right)
 
 # Spatial location calculator configuration
+# Set up a 16x10 ROI spatial location calculator node
 slc = pipeline.create(dai.node.SpatialLocationCalculator)
 for x in range(15):
     for y in range(9):
         config = dai.SpatialLocationCalculatorConfigData()
         config.depthThresholds.lowerThreshold = 200
         config.depthThresholds.upperThreshold = 10000
+        # roi rectangle is based on (0.0 .. 1.0) in each dimension
         config.roi = dai.Rect(dai.Point2f((x+0.5)*0.0625, (y+0.5)*0.1), dai.Point2f((x+1.5)*0.0625, (y+1.5)*0.1))
         config.calculationAlgorithm = dai.SpatialLocationCalculatorAlgorithm.MEDIAN
         slc.initialConfig.addROI(config)
@@ -54,15 +56,7 @@ for x in range(15):
 stereo.depth.link(slc.inputDepth)
 stereo.setDepthAlign(dai.CameraBoardSocket.RGB)
 
-# Create output
-# slcOut = pipeline.create(dai.node.XLinkOut)
-# slcOut.setStreamName('slc')
-# slc.out.link(slcOut.input)
-
-# colorOut = pipeline.create(dai.node.XLinkOut)
-# colorOut.setStreamName('color')
-# camRgb.video.link(colorOut.input)
-
+# Set up a SYNC node, so the color image frames are time-synced with the depth info
 sync = pipeline.create(dai.node.Sync)
 sync.setSyncThreshold(timedelta(milliseconds=50))
 
@@ -71,26 +65,21 @@ camRgb.video.link(sync.inputs['color'])
 
 outGroup = pipeline.create(dai.node.XLinkOut)
 outGroup.setStreamName("xout")
-
 sync.out.link(outGroup.input)
 
 # Connect to device and start pipeline
 with dai.Device(pipeline) as device:
-    # Output queues will be used to get the color mono frames and spatial location data
-    # qColor = device.getOutputQueue(name="color", maxSize=4, blocking=False)
-    # qSlc = device.getOutputQueue(name="slc", maxSize=4, blocking=False)
     queue = device.getOutputQueue("xout", maxSize=10, blocking=False)
-
     fontType = cv2.FONT_HERSHEY_TRIPLEX
     line_filename = os.path.join(metadata_path, 'roi.txt')
+    ms_start = None
 
     while True:
         start_time = int(time.time() * 1000)
-        # inColor = qColor.get()  # Try to get a frame from the color camera
-        # inSlc = qSlc.get()  # Try to get spatial location data
         msgGrp = queue.get()
         colorFrame = None
         slc_data = None
+        # Pull the color and slc data out of the sync group
         for name, msg in msgGrp:
             if name == 'color':
                 colorFrame = msg.getCvFrame()
@@ -102,9 +91,13 @@ with dai.Device(pipeline) as device:
         if slc_data is None:
             print("No spatial location data")
 
+        # Make sure we have data from both color and slc
         if slc_data is not None and colorFrame is not None:
             ms_count = int(time.time() * 1000)
-            line = '{0}, {1}'.format(ms_count, len(slc_data))
+            if ms_start is None:
+                ms_start = ms_count
+            ms_count = ms_count - ms_start
+            line = '{0:08d}, {1}'.format(ms_count, len(slc_data))
             for depthData in slc_data:
                 roi = depthData.config.roi
                 roi = roi.denormalize(width=colorFrame.shape[1], height=colorFrame.shape[0])
@@ -134,11 +127,13 @@ with dai.Device(pipeline) as device:
                 cv2.rectangle(colorFrame, (xmin, ymin), (xmax, ymax), color, thickness=2)
                 cv2.putText(colorFrame, "{:.1f}m".format(distance / 1000), (xmin + 10, ymin + 20), fontType, 0.5, color)
 
-            image_filename = os.path.join(image_path, 'frame-{}.jpg'.format(ms_count))
+            image_filename = os.path.join(image_path, 'frame-{0:08d}.jpg'.format(ms_count))
             cv2.imwrite(image_filename, colorFrame)
             with open(line_filename, 'a') as line_file:
                 line_file.write(line)
                 line_file.write('\n')
+
         delta_time = int(time.time() * 1000) - start_time
+        # Calculate sleep time in seconds, since that is what time.sleep() uses
         sleep_time = 0.1 - (delta_time / 1000.0)
         time.sleep(max(0, sleep_time))

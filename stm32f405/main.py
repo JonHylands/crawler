@@ -1,5 +1,6 @@
 
-# from bus_device import *
+from bus_device import *
+from failsafe import *
 from util import *
 from encoder import Encoder
 from servo_decoder import ServoDecoder
@@ -63,15 +64,24 @@ class Crawler:
         # self.back_left_range_sensor = LaserRangeSensor('Back Left', self.i2c, self.BACK_LEFT_LIDAR_ADDRESS, self.BACK_LEFT_LIDAR_SHUTDOWN_PIN, LaserRangeSensor.LASER_SENSOR_VL53L1X)
         # self.back_center_range_sensor = LaserRangeSensor('Back Left', self.i2c, self.BACK_CENTER_LIDAR_ADDRESS, self.BACK_CENTER_LIDAR_SHUTDOWN_PIN, LaserRangeSensor.LASER_SENSOR_VL53L1X)
         # self.back_right_range_sensor = LaserRangeSensor('Back Left', self.i2c, self.BACK_RIGHT_LIDAR_ADDRESS, self.BACK_RIGHT_LIDAR_SHUTDOWN_PIN, LaserRangeSensor.LASER_SENSOR_VL53L1X)
-        # self.imu = BNO085_IMU(self.IMU_UART_PORT)
-        # need failsafe, rpi
+        self.imu = BNO085_IMU(self.IMU_UART_PORT)
+        self.failsafe = Failsafe(self.handle_failsafe_packet, self.FAILSAFE_UART_PORT)
+        self.device = BusDevice(self, self.RPI_UART_PORT)
+
+    def handle_failsafe_packet(self, packet):
+        pass
 
     def run(self):
+        servo_metro = Metro(20)
         while True:
-            self.motor_servo.position(self.motor_decoder.pulse_width)
-            self.steering_servo.position(self.steering_decoder.pulse_width)
-            print('Encoder: {}'.format(self.encoder.value()))
-            time.sleep_ms(20)
+            if servo_metro.check():
+                self.motor_servo.position(self.motor_decoder.pulse_width)
+                self.steering_servo.position(self.steering_decoder.pulse_width)
+            # print('Encoder: {}'.format(self.encoder.value()))
+            if self.imu.ready():
+                self.imu.update()
+            self.failsafe.update()
+            self.device.update()
 
 
 micropython.alloc_emergency_exception_buf(100)

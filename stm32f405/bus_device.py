@@ -1,7 +1,6 @@
 
 from machine import UART
 from Packet import Packet
-import gc
 from util import *
 
 
@@ -61,15 +60,13 @@ PACKET_ERROR_NONE = 0x00             # No Error
 DEVICE_ID = 140
 
 
-class BioloidDevice:
+class BusDevice:
   def __init__(self, owner, uart_number):
     self.port = UART(uart_number, 1000000, rxbuf=1000)
-    self.uart = self.port.uart
     self.initControlTable()
     self.packet = Packet()
     self.packet.register_callback(self.packetReceived)
     self.owner = owner
-    self.gc_timer = Metro(1000)
     # flush the UART
     while self.port.any():
       self.port.read()
@@ -100,7 +97,7 @@ class BioloidDevice:
     self.owner.logger.info('BIOLOID_HEAD - Got ping')
     # pyb.udelay(self.controlTable[CONTROL_RETURN_DELAY_TIME] * 2)
     response_buffer = bytearray([0xFF, 0xFF, DEVICE_ID, 0x02, 0, ((DEVICE_ID + 2) ^ 255)])
-    self.port.write_packet(response_buffer)
+    self.port.write(response_buffer)
 
   def handleRead(self, packet):
     # self.owner.logger.info('BIOLOID_HEAD - Got read')
@@ -117,14 +114,14 @@ class BioloidDevice:
       response_buffer.append(byte)
       crc += byte
     response_buffer.append((crc & 255) ^ 255)
-    self.port.write_packet(response_buffer)
+    self.port.write(response_buffer)
     # print('{} handleRead {} bytes at {}'.format(DEVICE_ID, length, start))
 
   def sendErrorResponse(self, packet, error):
     response_buffer = bytearray([0xFF, 0xFF, DEVICE_ID, 2, error])
     crc = DEVICE_ID + 2
     response_buffer.append((crc & 255) ^ 255)
-    self.port.write_packet(response_buffer)
+    self.port.write(response_buffer)
 
   def handleWrite(self, packet):
     # self.owner.logger.info('BIOLOID_HEAD - Got write')
@@ -139,7 +136,7 @@ class BioloidDevice:
     response_buffer.append((crc & 255) ^ 255)
     for index in range(start, start + length):
       self.controlTable[index] = packet.parameters[index + 1]
-    self.port.write_packet(response_buffer)
+    self.port.write(response_buffer)
     # print('{} handleWrite {} bytes at {}'.format(DEVICE_ID, length, start))
 
   def update(self):
@@ -149,5 +146,3 @@ class BioloidDevice:
     except Exception as ex:
       self.owner.logger.warn('Exception on packet read: {} (resetting packet state)'.format(ex))
       self.packet.reset_state()
-    if self.gc_timer.check():
-      gc.collect()

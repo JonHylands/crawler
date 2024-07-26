@@ -6,6 +6,43 @@ import time
 import json
 
 
+#================================================
+#
+#       Class HeartbeatLED
+#
+
+class HeartbeatLED:
+
+    def __init__(self, ledPin):
+        self.led = ledPin
+        self.led.value(1)
+        self.timer = Metro(0)
+        self.set(100, 900)
+
+    def set(self, newOnInterval, newOffInterval):
+        self.onInterval = newOnInterval
+        self.offInterval = newOffInterval
+        self.timer.setInterval(self.offInterval)
+        self.ledState = 0
+        self.led.value(1)
+
+    def update(self):
+        if self.timer.check():
+            if self.ledState:
+                self.ledState = 0
+                self.led.value(1)
+                if self.onInterval != self.offInterval:
+                    self.timer.setInterval(self.offInterval)
+            else:
+                self.ledState = 1
+                self.led.value(0)
+                if self.onInterval != self.offInterval:
+                    self.timer.setInterval(self.onInterval)
+
+    def shutdown(self):
+        self.led.value(0)
+    
+
 class Metro:
   def __init__(self, interval_millis):
     self.interval = interval_millis
@@ -51,19 +88,11 @@ class RobotComms:
 
 print('URC Telemetry on Robot (ESP32)')
 
-led = Pin(21, Pin.OUT)
-led.off()
-
-led_value = 0
-led_metro = Metro(250)
+led_pin = Pin(21, Pin.OUT)
+led = HeartbeatLED(led_pin)
 
 rc = RobotComms()
-try:
-    while True:
-        if led_metro.check():
-            led.value(led_value)
-            led_value = led_value ^ 1
-        rc.update()
-        time.sleep_ms(1)
-except:
-   machine.reset()
+while True:
+    led.update()
+    rc.update()
+    time.sleep_ms(1)

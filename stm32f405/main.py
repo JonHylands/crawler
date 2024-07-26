@@ -8,7 +8,7 @@ from servo import Servo
 from laser import LaserRangeSensor
 from imu import BNO085_IMU
 import micropython
-import time
+import struct
 from machine import Pin, ADC, I2C
 
 
@@ -51,6 +51,11 @@ class Crawler:
     BACK_RIGHT_LIDAR_SHUTDOWN_PIN = 'C15'
     BACK_RIGHT_LIDAR_ADDRESS = 0x33
 
+    # Control
+    CONTROL_MODE_AUTONOMOUS = 0
+    CONTROL_MODE_STOPPED = 1
+    CONTROL_MODE_RC = 2
+
 
     def __init__(self):
         self.encoder = Encoder(Pin(self.ENCODER_A_PIN, Pin.IN), Pin(self.ENCODER_B_PIN, Pin.IN))
@@ -67,21 +72,50 @@ class Crawler:
         self.imu = BNO085_IMU(self.IMU_UART_PORT)
         self.failsafe = Failsafe(self.handle_failsafe_packet, self.FAILSAFE_UART_PORT)
         self.device = BusDevice(self, self.RPI_UART_PORT)
+        self.mode = self.CONTROL_MODE_RC
+        self.desired_speed = 0
+        self.desired_turn_rate = 0
+        self.voltage = 0
 
     def handle_failsafe_packet(self, packet):
         pass
 
+    def update_control_table(self):
+        struct.pack_into("<hhhHHHHlBB", self.device.controlTable, CONTROL_IMU_PITCH_LOW, 
+            self.imu.pitch, self.imu.roll, self.imu.yaw, 0, 0, 0, 0, self.encoder.value, 
+            self.mode, self.voltage)
+        if self.mode == self.CONTROL_MODE_RC:
+            struct.pack_into("<bb", self.device.controlTable, CONTROL_ROBOT_DESIRED_SPEED, 
+                self.desired_speed, self.desired_turn_rate)
+
+    # input speed is from -100 to 100
+    # output speed needs to be from 1000 to 2000
+    def motor_speed_from(self, speed):
+        return ((speed + 100) * 5) + 1000
+
+    # input steering is from -100 to 100
+    # output steering needs to be from 1000 to 2000
+    def steering_position_from(self, steering):
+        return ((steering + 100) * 5) + 1000
+
     def run(self):
-        servo_metro = Metro(20)
+        cycle_metro = Metro(20)
         while True:
-            if servo_metro.check():
-                self.motor_servo.position(self.motor_decoder.pulse_width)
-                self.steering_servo.position(self.steering_decoder.pulse_width)
-            # print('Encoder: {}'.format(self.encoder.value()))
             if self.imu.ready():
                 self.imu.update()
-            self.failsafe.update()
-            self.device.update()
+            if cycle_metro.check():
+                self.failsafe.update()
+                self.update_control_table()
+                self.device.update()
+                if self.mode == self.CONTROL_MODE_RC:
+                    # In RC mode we get speed & steering from reading the receiver pulses
+                    self.motor_servo.position(self.motor_decoder.pulse_width)
+                    self.steering_servo.position(self.steering_decoder.pulse_width)
+                else:
+                    # In Autonomous mode we get speed & steering from the control table
+                    self.desired_speed, self.desired_turn_rate = struct.unpack_from("<bb", self.device.controlTable, CONTROL_ROBOT_DESIRED_SPEED)
+                    self.motor_servo.position(self.motor_speed_from(self.desired_speed))
+                    self.steering_servo.position(self.steering_position_from(self.desired_turn_rate))
 
 
 micropython.alloc_emergency_exception_buf(100)
